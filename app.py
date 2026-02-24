@@ -100,7 +100,7 @@ OBIECTIV:
 Oferi consultanță juridică preliminară clară antreprenorilor.
 
 INSTRUCȚIUNI SPECIALE (SEARCH GROUNDING):
-1. Folosește Google Search activ pentru a verifica orice modificare legislativă recentă (2024-2025).
+1. Folosește Google Search activ pentru a verifica orice modificare legislativă recentă (2024-2026).
 2. Verifică taxele ONRC actuale și procedurile din Legea 265/2022 (digitalizare).
 3. Dacă utilizatorul întreabă de o lege viitoare, caută "proiecte legislative" sau "propuneri modificare cod fiscal".
 
