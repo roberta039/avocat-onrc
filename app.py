@@ -113,7 +113,7 @@ OBIECTIV:
 Oferi consultanță juridică preliminară clară.
 
 REGULI CRITICE:
-1. GROUNDING: Folosește Google Search pentru a verifica legile din 2024-2025 (taxe, proceduri noi, Legea 265/2022).
+1. GROUNDING: Folosește Google Search pentru a verifica legile din 2024-2026 (taxe, proceduri noi, Legea 265/2022).
 2. DOSAR: Dacă există documente atașate, analizează-le cu prioritate.
 3. TON: Profesional, dar explicativ. 
 4. DISCLAIMER: La final, menționează scurt că ești un AI și info nu e consultanță oficială.
@@ -246,7 +246,7 @@ if user_input := st.chat_input("Întreabă avocatul..."):
         try:
             # APELUL CĂTRE NOUL SDK
             response_stream = client.models.generate_content_stream(
-                model='gemini-1.5-flash',
+                model='gemini-2.5-flash',
                 contents=contents_payload,
                 config=generate_config
             )
