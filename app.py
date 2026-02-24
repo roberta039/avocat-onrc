@@ -108,7 +108,7 @@ DISCLAIMER: "Info orientativă. Nu ține loc de avocat."
 """
 
 model = genai.GenerativeModel(
-    "models/gemini-1.5-flash",
+    "models/gemini-2.5-flash",
     tools=tools_config,
     system_instruction=PROMPT_AVOCAT
 )
