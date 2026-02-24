@@ -27,26 +27,36 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. CLIENTUL NOU GOOGLE GENAI (CORECTAT)
+# 2. CLIENTUL NOU GOOGLE GENAI (CORECTAT PENTRU EROAREA LIST)
 # ==========================================
 
-# 1. Încercăm să luăm cheia din secrete
 api_key = None
-if "GOOGLE_API_KEY" in st.secrets:
-    api_key = st.secrets["GOOGLE_API_KEY"]
 
-# 2. Dacă nu există în secrete, o cerem în interfață
+# 1. Extragem din secrete
+if "GOOGLE_API_KEY" in st.secrets:
+    raw_key = st.secrets["GOOGLE_API_KEY"]
+    
+    # --- FIX PENTRU EROAREA 'LIST HAS NO ATTRIBUTE STRIP' ---
+    # Verificăm dacă cheia a fost citită ca o listă (ex: ["AIza..."])
+    if isinstance(raw_key, list):
+        api_key = raw_key[0] # Luăm primul element
+    else:
+        api_key = raw_key    # E deja text
+
+# 2. Dacă nu e în secrete, o cerem manual
 if not api_key:
     api_key = st.sidebar.text_input("Introdu Google API Key:", type="password")
 
-# 3. VERIFICARE CRITICĂ: Dacă tot nu avem cheie, OPRIM TOT.
+# 3. Stop dacă nu avem cheie
 if not api_key:
-    st.warning("⚠️ Te rog introdu cheia API în sidebar pentru a activa avocatul.")
+    st.warning("⚠️ Te rog introdu cheia API în sidebar.")
     st.stop()
 
-# 4. Inițializare Client
+# 4. Conectare
 try:
-    client = genai.Client(api_key=api_key)
+    # Asigură-te că e string curat
+    clean_key = str(api_key).strip()
+    client = genai.Client(api_key=clean_key)
 except Exception as e:
     st.error(f"Eroare la conectarea cu Google AI: {e}")
     st.stop()
@@ -105,7 +115,7 @@ Oferi consultanță juridică preliminară clară.
 REGULI CRITICE:
 1. GROUNDING: Folosește Google Search pentru a verifica legile din 2024-2025 (taxe, proceduri noi, Legea 265/2022).
 2. DOSAR: Dacă există documente atașate, analizează-le cu prioritate.
-3. TON: Profesional, dar explicativ. Nu folosi termeni juridici grei fără explicații.
+3. TON: Profesional, dar explicativ. 
 4. DISCLAIMER: La final, menționează scurt că ești un AI și info nu e consultanță oficială.
 """
 
@@ -129,14 +139,14 @@ st.sidebar.title("🗂️ Dosar Acte")
 if st.sidebar.button("🗑️ Resetare Caz", type="primary"):
     clear_history(st.session_state.session_id)
     st.session_state.messages = []
-    st.session_state.file_bytes_store = [] # Resetăm fișierele
+    st.session_state.file_bytes_store = [] 
     st.rerun()
 
 st.sidebar.divider()
 
 # Stocare date brute fișiere în sesiune
 if "file_bytes_store" not in st.session_state:
-    st.session_state.file_bytes_store = [] # Listă de dict: {'name': str, 'mime': str, 'data': bytes}
+    st.session_state.file_bytes_store = [] 
 
 uploaded_files = st.sidebar.file_uploader("Adaugă la Dosar", type=["jpg", "png", "pdf"], accept_multiple_files=True)
 
@@ -194,10 +204,10 @@ if user_input := st.chat_input("Întreabă avocatul..."):
     with st.chat_message("user", avatar="👤"):
         st.write(user_input)
 
-    # 2. Construire Istoric + Fișiere (NOUA LOGICĂ SDK)
+    # 2. Construire Payload (Istoric + Fișiere + Întrebare)
     contents_payload = []
     
-    # A. Adăugăm istoricul text anterior
+    # Adăugăm istoricul text anterior
     for msg in st.session_state.messages[:-1]:
         role_gemini = "model" if msg["role"] == "assistant" else "user"
         contents_payload.append(types.Content(
@@ -205,10 +215,10 @@ if user_input := st.chat_input("Întreabă avocatul..."):
             parts=[types.Part.from_text(text=msg["content"])]
         ))
     
-    # B. Construim mesajul CURENT (Fișiere + Întrebare)
+    # Construim mesajul CURENT
     current_message_parts = []
     
-    # Adăugăm fișierele din dosar (convertite în types.Part)
+    # Adăugăm fișierele din dosar
     if st.session_state.file_bytes_store:
         for f_store in st.session_state.file_bytes_store:
             part = types.Part.from_bytes(
@@ -236,7 +246,7 @@ if user_input := st.chat_input("Întreabă avocatul..."):
         try:
             # APELUL CĂTRE NOUL SDK
             response_stream = client.models.generate_content_stream(
-                model='gemini-2.5-flash',
+                model='gemini-1.5-flash',
                 contents=contents_payload,
                 config=generate_config
             )
