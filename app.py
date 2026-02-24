@@ -7,41 +7,55 @@ from io import BytesIO
 import sqlite3
 import uuid
 import time
-import base64
 
 # ==========================================
 # 1. CONFIGURARE PAGINĂ & STIL
 # ==========================================
-st.set_page_config(page_title="Avocat ONRC AI (GenAI v1)", page_icon="⚖️", layout="wide")
+st.set_page_config(
+    page_title="Avocat ONRC AI (GenAI v1)",
+    page_icon="⚖️",
+    layout="wide"
+)
 
 st.markdown("""
 <style>
     .stChatMessage { font-family: 'Georgia', serif; font-size: 1.05rem; }
     .stButton button { background-color: #2c3e50; color: white; }
     .stSuccess { background-color: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; }
+    h1 { color: #1e3a8a; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. CLIENTUL NOU GOOGLE GENAI
+# 2. CLIENTUL NOU GOOGLE GENAI (CORECTAT)
 # ==========================================
+
+# 1. Încercăm să luăm cheia din secrete
+api_key = None
 if "GOOGLE_API_KEY" in st.secrets:
     api_key = st.secrets["GOOGLE_API_KEY"]
-else:
+
+# 2. Dacă nu există în secrete, o cerem în interfață
+if not api_key:
     api_key = st.sidebar.text_input("Introdu Google API Key:", type="password")
 
+# 3. VERIFICARE CRITICĂ: Dacă tot nu avem cheie, OPRIM TOT.
 if not api_key:
-    st.warning("⚠️ Te rog introdu cheia API.")
+    st.warning("⚠️ Te rog introdu cheia API în sidebar pentru a activa avocatul.")
     st.stop()
 
-# Initializare Client Nou
-client = genai.Client(api_key=api_key)
+# 4. Inițializare Client
+try:
+    client = genai.Client(api_key=api_key)
+except Exception as e:
+    st.error(f"Eroare la conectarea cu Google AI: {e}")
+    st.stop()
 
 # ==========================================
-# 3. MEMORIE SQLITE (Păstrată)
+# 3. MEMORIE SQLITE
 # ==========================================
 def init_db():
-    conn = sqlite3.connect('legal_chat_v2.db')
+    conn = sqlite3.connect('legal_chat_v3.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS history 
                  (session_id TEXT, role TEXT, content TEXT, timestamp REAL)''')
@@ -49,14 +63,14 @@ def init_db():
     conn.close()
 
 def save_message(session_id, role, content):
-    conn = sqlite3.connect('legal_chat_v2.db')
+    conn = sqlite3.connect('legal_chat_v3.db')
     c = conn.cursor()
     c.execute("INSERT INTO history VALUES (?, ?, ?, ?)", (session_id, role, content, time.time()))
     conn.commit()
     conn.close()
 
 def load_history(session_id):
-    conn = sqlite3.connect('legal_chat_v2.db')
+    conn = sqlite3.connect('legal_chat_v3.db')
     c = conn.cursor()
     c.execute("SELECT role, content FROM history WHERE session_id=? ORDER BY timestamp ASC", (session_id,))
     data = c.fetchall()
@@ -64,7 +78,7 @@ def load_history(session_id):
     return [{"role": row[0], "content": row[1]} for row in data]
 
 def clear_history(session_id):
-    conn = sqlite3.connect('legal_chat_v2.db')
+    conn = sqlite3.connect('legal_chat_v3.db')
     c = conn.cursor()
     c.execute("DELETE FROM history WHERE session_id=?", (session_id,))
     conn.commit()
@@ -80,7 +94,7 @@ else:
     st.session_state.session_id = st.query_params["session_id"]
 
 # ==========================================
-# 4. CONFIGURARE AVOCAT (SYSTEM PROMPT & TOOLS)
+# 4. CONFIGURARE AVOCAT
 # ==========================================
 PROMPT_AVOCAT = """
 Ești un Avocat Virtual Expert în ONRC și Legislație Comercială (România).
@@ -91,20 +105,19 @@ Oferi consultanță juridică preliminară clară.
 REGULI CRITICE:
 1. GROUNDING: Folosește Google Search pentru a verifica legile din 2024-2025 (taxe, proceduri noi, Legea 265/2022).
 2. DOSAR: Dacă există documente atașate, analizează-le cu prioritate.
-3. TON: Profesional, dar explicativ. Nu folosi "avocăreza" fără a explica termenii.
+3. TON: Profesional, dar explicativ. Nu folosi termeni juridici grei fără explicații.
 4. DISCLAIMER: La final, menționează scurt că ești un AI și info nu e consultanță oficială.
 """
 
-# Configurare Unelte (Noua Sintaxă)
+# Configurare Unelte (Noua Sintaxă SDK v1)
 search_tool = types.Tool(
     google_search=types.GoogleSearch()
 )
 
-# Configurare Generare
 generate_config = types.GenerateContentConfig(
     system_instruction=PROMPT_AVOCAT,
     tools=[search_tool],
-    temperature=0.3 # Mai precis pentru legal
+    temperature=0.3
 )
 
 # ==========================================
@@ -116,43 +129,43 @@ st.sidebar.title("🗂️ Dosar Acte")
 if st.sidebar.button("🗑️ Resetare Caz", type="primary"):
     clear_history(st.session_state.session_id)
     st.session_state.messages = []
-    st.session_state.file_parts = [] # Resetăm fișierele din memorie
+    st.session_state.file_bytes_store = [] # Resetăm fișierele
     st.rerun()
 
 st.sidebar.divider()
 
-# Stocare fișiere în sesiune (ca obiecte 'types.Part' gata de trimis)
-if "file_parts" not in st.session_state:
-    st.session_state.file_parts = []
+# Stocare date brute fișiere în sesiune
+if "file_bytes_store" not in st.session_state:
+    st.session_state.file_bytes_store = [] # Listă de dict: {'name': str, 'mime': str, 'data': bytes}
 
 uploaded_files = st.sidebar.file_uploader("Adaugă la Dosar", type=["jpg", "png", "pdf"], accept_multiple_files=True)
 
 if uploaded_files:
     if st.sidebar.button("📥 Procesează Documente"):
         for up_file in uploaded_files:
-            try:
-                # 1. Citim fișierul ca bytes
-                file_bytes = up_file.getvalue()
-                mime_type = up_file.type
-                
-                # 2. Creăm obiectul Part (Noua metodă SDK)
-                # Acesta este formatul nativ pe care îl așteaptă noul client
-                file_part = types.Part.from_bytes(
-                    data=file_bytes,
-                    mime_type=mime_type
-                )
-                
-                st.session_state.file_parts.append(file_part)
-                st.sidebar.success(f"✅ {up_file.name} memorat.")
-                
-            except Exception as e:
-                st.sidebar.error(f"Eroare procesare {up_file.name}: {e}")
-        time.sleep(1)
+            # Verificăm duplicarea
+            if not any(f['name'] == up_file.name for f in st.session_state.file_bytes_store):
+                try:
+                    file_data = {
+                        "name": up_file.name,
+                        "mime": up_file.type,
+                        "data": up_file.getvalue()
+                    }
+                    st.session_state.file_bytes_store.append(file_data)
+                    st.sidebar.success(f"✅ {up_file.name} adăugat.")
+                except Exception as e:
+                    st.sidebar.error(f"Eroare: {e}")
+            else:
+                st.sidebar.warning(f"⚠️ {up_file.name} există deja.")
+        
+        time.sleep(1) # Refresh UI
         st.rerun()
 
 # Afișare stare dosar
-if st.session_state.file_parts:
-    st.sidebar.info(f"Dosar activ: {len(st.session_state.file_parts)} documente")
+if st.session_state.file_bytes_store:
+    st.sidebar.info(f"Dosar activ: {len(st.session_state.file_bytes_store)} documente")
+    for f in st.session_state.file_bytes_store:
+        st.sidebar.text(f"📄 {f['name']}")
 else:
     st.sidebar.caption("Dosar gol.")
 
@@ -162,6 +175,7 @@ enable_audio = st.sidebar.checkbox("🔊 Audio", value=False)
 # 6. CHAT INTERFACE
 # ==========================================
 st.title("⚖️ Avocat Consultant ONRC")
+st.caption("Expertiză juridică asistată de AI • Conectat la Google Search")
 
 if "messages" not in st.session_state or not st.session_state.messages:
     st.session_state.messages = load_history(st.session_state.session_id)
@@ -180,10 +194,10 @@ if user_input := st.chat_input("Întreabă avocatul..."):
     with st.chat_message("user", avatar="👤"):
         st.write(user_input)
 
-    # 2. Construire Istoric + Fișiere (NOUA LOGICĂ)
+    # 2. Construire Istoric + Fișiere (NOUA LOGICĂ SDK)
     contents_payload = []
     
-    # Adăugăm istoricul text anterior (pentru context)
+    # A. Adăugăm istoricul text anterior
     for msg in st.session_state.messages[:-1]:
         role_gemini = "model" if msg["role"] == "assistant" else "user"
         contents_payload.append(types.Content(
@@ -191,18 +205,24 @@ if user_input := st.chat_input("Întreabă avocatul..."):
             parts=[types.Part.from_text(text=msg["content"])]
         ))
     
-    # Construim mesajul CURENT
+    # B. Construim mesajul CURENT (Fișiere + Întrebare)
     current_message_parts = []
     
-    # A. Adăugăm fișierele din dosar (dacă există)
-    if st.session_state.file_parts:
-        current_message_parts.extend(st.session_state.file_parts)
+    # Adăugăm fișierele din dosar (convertite în types.Part)
+    if st.session_state.file_bytes_store:
+        for f_store in st.session_state.file_bytes_store:
+            part = types.Part.from_bytes(
+                data=f_store['data'],
+                mime_type=f_store['mime']
+            )
+            current_message_parts.append(part)
+        
         current_message_parts.append(types.Part.from_text(text="\n\n[SISTEM: Analizează documentele de mai sus din dosarul clientului.]"))
     
-    # B. Adăugăm întrebarea text
+    # Adăugăm întrebarea text
     current_message_parts.append(types.Part.from_text(text=user_input))
     
-    # Adăugăm mesajul curent la payload
+    # Adăugăm totul la payload
     contents_payload.append(types.Content(
         role="user",
         parts=current_message_parts
@@ -215,7 +235,6 @@ if user_input := st.chat_input("Întreabă avocatul..."):
         
         try:
             # APELUL CĂTRE NOUL SDK
-            # generate_content_stream este noua metodă
             response_stream = client.models.generate_content_stream(
                 model='gemini-2.5-flash',
                 contents=contents_payload,
@@ -229,10 +248,6 @@ if user_input := st.chat_input("Întreabă avocatul..."):
             
             placeholder.markdown(full_text)
             
-            # Verificare Grounding (Google Search) - Structura e diferită în noul SDK
-            # De obicei info despre grounding vine în ultimul chunk sau în response metadata
-            # Simplificare: afișăm doar textul, noul SDK integrează sursele în text adesea.
-
             # Salvare
             st.session_state.messages.append({"role": "assistant", "content": full_text})
             save_message(st.session_state.session_id, "assistant", full_text)
@@ -247,5 +262,3 @@ if user_input := st.chat_input("Întreabă avocatul..."):
 
         except Exception as e:
             st.error(f"Eroare comunicare AI: {e}")
-            # Debugging pentru noul SDK
-            # st.error(str(e))
