@@ -20,8 +20,7 @@ st.markdown("""
 <style>
     .stChatMessage { font-family: 'Georgia', serif; font-size: 1.05rem; }
     .stButton button { background-color: #2c3e50; color: white; }
-    /* Ascundem cursorul de streaming la final */
-    .stMarkdown p { margin-bottom: 0.5rem; }
+    .stSuccess { background-color: #d4edda; color: #155724; padding: 10px; border-radius: 5px;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -60,6 +59,7 @@ def clear_history_db(session_id):
 
 init_db()
 
+# Gestionare ID Sesiune
 if "session_id" not in st.query_params:
     new_id = str(uuid.uuid4())
     st.query_params["session_id"] = new_id
@@ -68,7 +68,7 @@ else:
     st.session_state.session_id = st.query_params["session_id"]
 
 # ==========================================
-# 3. CONFIGURARE AI (CU RETRY)
+# 3. CONFIGURARE AI
 # ==========================================
 if "GOOGLE_API_KEY" in st.secrets:
     api_key = st.secrets["GOOGLE_API_KEY"]
@@ -97,59 +97,88 @@ PROMPT_AVOCAT = """
 Ești un Avocat Virtual Senior, expert în Drept Comercial și Proceduri ONRC (România).
 
 OBIECTIV:
-Oferi consultanță preliminară clară, bazată pe legislația la zi (2023-2026).
+Oferi consultanță preliminară clară, bazată pe legislația la zi (2024-2025).
 
 INSTRUCȚIUNI:
-1. Verifică activ pe Google modificările recente (ex: Legea 265/2022).
-2. Dacă fișierul atașat este mare, fă un rezumat juridic.
-3. Dacă primești erori de conectare, fii concis.
+1. Verifică activ pe Google modificările recente.
+2. Analizează TOATE documentele din dosarul curent dacă este cazul.
+3. Fii concis și profesionist.
 
 DISCLAIMER: "Info orientativă. Nu ține loc de avocat."
 """
 
 model = genai.GenerativeModel(
-    "models/gemini-2.5-flash",
+    "models/gemini-1.5-flash",
     tools=tools_config,
     system_instruction=PROMPT_AVOCAT
 )
 
 # ==========================================
-# 4. SIDEBAR & FILE HANDLER
+# 4. SIDEBAR - GESTIONARE DOSAR (FIȘIERE MULTIPLE)
 # ==========================================
 st.sidebar.title("⚖️ Cabinet Virtual")
 
-if st.sidebar.button("🗑️ Resetare Caz", type="primary"):
+# Inițializare listă fișiere în sesiune
+if "dosar_files" not in st.session_state:
+    st.session_state.dosar_files = []
+
+# Buton Reset Total
+if st.sidebar.button("🗑️ Resetare Caz (Tot)", type="primary"):
     clear_history_db(st.session_state.session_id)
     st.session_state.messages = []
+    st.session_state.dosar_files = [] # Ștergem și fișierele
     st.rerun()
 
-enable_audio = st.sidebar.checkbox("🔊 Audio (La final)", value=False)
 st.sidebar.divider()
 
-uploaded_files = st.sidebar.file_uploader("Încarcă acte", type=["jpg", "png", "pdf"], accept_multiple_files=True)
+# --- ZONA UPLOAD ---
+st.sidebar.header("📂 Adaugă la Dosar")
+uploaded_files_widget = st.sidebar.file_uploader("Selectează documente", type=["jpg", "png", "pdf"], accept_multiple_files=True, key="uploader")
 
-current_files_data = []
-if uploaded_files:
-    for up_file in uploaded_files:
-        try:
-            # Citim direct în memorie (fără upload HTTP)
-            bytes_data = up_file.getvalue()
-            current_files_data.append({
-                "mime_type": up_file.type,
-                "data": bytes_data
-            })
-            if "image" in up_file.type:
-                st.sidebar.image(up_file, caption="Atașament", use_container_width=True)
+if uploaded_files_widget:
+    if st.sidebar.button("📥 Salvează în Dosar"):
+        for up_file in uploaded_files_widget:
+            # Verificăm să nu existe deja (după nume)
+            if not any(f['name'] == up_file.name for f in st.session_state.dosar_files):
+                try:
+                    file_data = {
+                        "name": up_file.name,
+                        "mime_type": up_file.type,
+                        "data": up_file.getvalue() # Citim bytes direct
+                    }
+                    st.session_state.dosar_files.append(file_data)
+                    st.sidebar.success(f"✅ {up_file.name} adăugat!")
+                except Exception as e:
+                    st.sidebar.error(f"Eroare: {e}")
             else:
-                st.sidebar.success(f"📄 {up_file.name}")
-        except Exception as e:
-            st.sidebar.error(f"Eroare fișier: {e}")
+                st.sidebar.warning(f"⚠️ {up_file.name} este deja în dosar.")
+        
+        # Mic truc pentru a face refresh la interfață
+        time.sleep(0.5)
+        st.rerun()
+
+# --- ZONA AFIȘARE DOSAR ---
+st.sidebar.subheader(f"Dosar Curent ({len(st.session_state.dosar_files)} acte)")
+
+if st.session_state.dosar_files:
+    # Afișăm lista de fișiere memorate
+    for file_info in st.session_state.dosar_files:
+        st.sidebar.text(f"📄 {file_info['name']}")
+    
+    # Buton golire doar fișiere
+    if st.sidebar.button("❌ Golește doar Dosarul"):
+        st.session_state.dosar_files = []
+        st.rerun()
+else:
+    st.sidebar.caption("Niciun document în memorie.")
+
+enable_audio = st.sidebar.checkbox("🔊 Audio", value=False)
 
 # ==========================================
-# 5. CHAT LOGIC (STREAMING IMPLEMENTAT)
+# 5. CHAT LOGIC
 # ==========================================
 st.title("⚖️ Avocat Consultant ONRC")
-st.caption("Sistem conectat la Monitorul Oficial via Google Search.")
+st.caption("Documentele adăugate în dosar rămân în memorie pe parcursul conversației.")
 
 # Încărcare mesaje
 if "messages" not in st.session_state or not st.session_state.messages:
@@ -160,26 +189,32 @@ for msg in st.session_state.messages:
         st.markdown(msg["content"])
 
 # INPUT
-if user_input := st.chat_input("Ex: Ce taxe am pentru un SRL în 2025?"):
+if user_input := st.chat_input("Întreabă despre documentele din dosar..."):
     
-    # Afișare User
     st.session_state.messages.append({"role": "user", "content": user_input})
     save_message_to_db(st.session_state.session_id, "user", user_input)
     with st.chat_message("user", avatar="👤"):
         st.write(user_input)
 
-    # Pregătire Date
+    # PREGĂTIRE CONTEXT
     history_for_chat = []
     for msg in st.session_state.messages[:-1]:
         role_gemini = "model" if msg["role"] == "assistant" else "user"
         history_for_chat.append({"role": role_gemini, "parts": [msg["content"]]})
 
+    # Construim mesajul curent: Text + TOATE fișierele din dosar
     current_parts = [user_input]
-    if current_files_data:
-        current_parts.extend(current_files_data)
-        current_parts.append("\n(Analizează documentele atașate)")
+    
+    if st.session_state.dosar_files:
+        current_parts.append("\nCONTEXT: Următoarele documente sunt în dosarul clientului. Folosește-le pentru a răspunde:")
+        for f in st.session_state.dosar_files:
+            # Reconstruim obiectul pentru Gemini din memoria sesiunii
+            current_parts.append({
+                "mime_type": f["mime_type"],
+                "data": f["data"]
+            })
 
-    # GENERARE CU STREAMING (Rezolvă eroarea 504)
+    # GENERARE
     with st.chat_message("assistant", avatar="⚖️"):
         message_placeholder = st.empty()
         full_response = ""
@@ -187,31 +222,28 @@ if user_input := st.chat_input("Ex: Ce taxe am pentru un SRL în 2025?"):
         try:
             chat = model.start_chat(history=history_for_chat)
             
-            # --- AICI E CHEIA: stream=True ---
+            # Streaming pentru viteză
             response_stream = chat.send_message(current_parts, stream=True)
             
-            # Iterăm prin bucățile de text pe măsură ce vin
             for chunk in response_stream:
                 if chunk.text:
                     full_response += chunk.text
-                    # Facem update vizual la fiecare cuvânt
                     message_placeholder.markdown(full_response + "▌")
             
-            # Afișare finală curată
             message_placeholder.markdown(full_response)
             
-            # Verificare Grounding (dacă e disponibil în ultimul chunk)
+            # Verificare Grounding
             try:
                 if response_stream.resolve().candidates[0].grounding_metadata.search_entry_point:
                     st.info("🔎 Verificat pe Google.")
             except:
                 pass
 
-            # Salvare DB
+            # Salvare
             st.session_state.messages.append({"role": "assistant", "content": full_response})
             save_message_to_db(st.session_state.session_id, "assistant", full_response)
 
-            # Audio (Doar după ce s-a terminat tot textul)
+            # Audio
             if enable_audio:
                 clean_text = full_response.replace("*", "")[:600]
                 sound_file = BytesIO()
@@ -220,6 +252,4 @@ if user_input := st.chat_input("Ex: Ce taxe am pentru un SRL în 2025?"):
                 st.audio(sound_file, format='audio/mp3')
 
         except Exception as e:
-            st.error(f"Eroare conexiune: {e}")
-            if "504" in str(e):
-                st.warning("⚠️ Răspunsul a durat prea mult. Încearcă să încarci un PDF mai mic sau să pui o întrebare mai scurtă.")
+            st.error(f"Eroare: {e}")
