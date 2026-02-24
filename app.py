@@ -72,7 +72,7 @@ else:
     st.session_state.session_id = st.query_params["session_id"]
 
 # ==========================================
-# 3. CONFIGURARE AI & SEARCH TOOL
+# 3. CONFIGURARE AI & SEARCH TOOL (CORECTAT)
 # ==========================================
 
 # API Key
@@ -82,14 +82,22 @@ else:
     api_key = st.sidebar.text_input("Introdu Google API Key:", type="password")
 
 if not api_key:
-    st.warning("🔒 Te rog introdu cheia API în sidebar pentru a activa avocatul.")
+    st.warning("🔒 Te rog introdu cheia API în sidebar.")
     st.stop()
 
 genai.configure(api_key=api_key)
 
-# Configurare Unealtă Căutare (Grounding)
+# --- AICI ERA EROAREA: Sintaxa corectă pentru Google Search ---
+# Folosim 'google_search_retrieval', nu 'google_search'
 tools_config = [
-    {"google_search": {}} # Activează căutarea nativă
+    {
+        "google_search_retrieval": {
+            "dynamic_retrieval_config": {
+                "mode": "dynamic",
+                "dynamic_threshold": 0.6,
+            }
+        }
+    }
 ]
 
 # Prompt Avocat ONRC
@@ -102,26 +110,21 @@ Oferi consultanță juridică preliminară clară antreprenorilor.
 INSTRUCȚIUNI SPECIALE (SEARCH GROUNDING):
 1. Folosește Google Search activ pentru a verifica orice modificare legislativă recentă (2024-2026).
 2. Verifică taxele ONRC actuale și procedurile din Legea 265/2022 (digitalizare).
-3. Dacă utilizatorul întreabă de o lege viitoare, caută "proiecte legislative" sau "propuneri modificare cod fiscal".
 
 REGULI DE RĂSPUNS:
-- Fii precis: Citează articolul de lege când e posibil.
 - Structură: Pas 1, Pas 2, Acte Necesare, Costuri Estimative.
 - Avertisment: Include mereu disclaimer-ul că ești un AI.
-
-LIMITĂRI:
-- Nu poți reprezenta clientul în instanță.
-- Nu poți semna acte în locul lui.
 """
 
 try:
     model = genai.GenerativeModel(
-        "models/gemini-2.5-flash", 
-        tools=tools_config,
+        "models/gemini-1.5-flash", 
+        tools=tools_config, # Acum folosește variabila corectată
         system_instruction=PROMPT_AVOCAT
     )
 except Exception as e:
     st.error(f"Eroare configurare model: {e}")
+    st.info("Sfat: Verifică dacă ai 'google-generativeai>=0.7.0' în requirements.txt")
     st.stop()
 
 # ==========================================
