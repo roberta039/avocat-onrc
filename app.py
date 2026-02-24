@@ -217,7 +217,7 @@ if user_input := st.chat_input("Întreabă avocatul..."):
             # APELUL CĂTRE NOUL SDK
             # generate_content_stream este noua metodă
             response_stream = client.models.generate_content_stream(
-                model='gemini-1.5-flash',
+                model='gemini-2.5-flash',
                 contents=contents_payload,
                 config=generate_config
             )
