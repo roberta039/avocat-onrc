@@ -306,7 +306,7 @@ if user_input := st.chat_input("Ex: Vreau să schimb sediul social. Redactează 
         
         try:
             response_stream = client.models.generate_content_stream(
-                model='gemini-2.5-flash',
+                model='gemini-2.5-flash-lite',
                 contents=contents_payload,
                 config=generate_config
             )
