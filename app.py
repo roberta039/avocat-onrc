@@ -7,9 +7,8 @@ from io import BytesIO
 import sqlite3
 import uuid
 import time
-import re  # <--- NOU: Pentru curățarea etichetelor HTML din Word
+import re
 from docx import Document
-from docx.shared import Pt
 
 # ==========================================
 # 1. CONFIGURARE PAGINĂ & STIL
@@ -30,10 +29,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. CLIENTUL GOOGLE GENAI (ROBUST)
+# 2. CLIENTUL GOOGLE GENAI
 # ==========================================
 api_key = None
-
 if "GOOGLE_API_KEY" in st.secrets:
     raw_key = st.secrets["GOOGLE_API_KEY"]
     if isinstance(raw_key, list):
@@ -59,7 +57,7 @@ except Exception as e:
 # 3. MEMORIE (SQLITE)
 # ==========================================
 def init_db():
-    conn = sqlite3.connect('legal_chat_clean.db')
+    conn = sqlite3.connect('legal_chat_v8.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS history 
                  (session_id TEXT, role TEXT, content TEXT, timestamp REAL)''')
@@ -67,14 +65,14 @@ def init_db():
     conn.close()
 
 def save_message(session_id, role, content):
-    conn = sqlite3.connect('legal_chat_clean.db')
+    conn = sqlite3.connect('legal_chat_v8.db')
     c = conn.cursor()
     c.execute("INSERT INTO history VALUES (?, ?, ?, ?)", (session_id, role, content, time.time()))
     conn.commit()
     conn.close()
 
 def load_history(session_id):
-    conn = sqlite3.connect('legal_chat_clean.db')
+    conn = sqlite3.connect('legal_chat_v8.db')
     c = conn.cursor()
     c.execute("SELECT role, content FROM history WHERE session_id=? ORDER BY timestamp ASC", (session_id,))
     data = c.fetchall()
@@ -82,7 +80,7 @@ def load_history(session_id):
     return [{"role": row[0], "content": row[1]} for row in data]
 
 def clear_history(session_id):
-    conn = sqlite3.connect('legal_chat_clean.db')
+    conn = sqlite3.connect('legal_chat_v8.db')
     c = conn.cursor()
     c.execute("DELETE FROM history WHERE session_id=?", (session_id,))
     conn.commit()
@@ -97,40 +95,32 @@ else:
     st.session_state.session_id = st.query_params["session_id"]
 
 # ==========================================
-# 4. GENERATOR DOCUMENTE WORD (CURĂȚARE HTML)
+# 4. GENERATOR DOCUMENTE WORD
 # ==========================================
 def create_docx(text):
     doc = Document()
     
-    # --- PAS 1: Curățare HTML (Citations & Tags) ---
-    # Eliminăm blocul de citații <details>...</details>
-    clean_text = re.sub(r'<details>.*?</details>', '', text, flags=re.DOTALL)
-    
-    # Înlocuim <br> cu linii noi
-    clean_text = clean_text.replace('<br>', '\n').replace('<br/>', '\n')
-    
-    # Eliminăm alte tag-uri HTML reziduale
-    clean_text = re.sub(r'<[^>]+>', '', clean_text)
+    # 1. Curățare HTML (Grounding artifacts)
+    if text:
+        clean_text = re.sub(r'<details>.*?</details>', '', text, flags=re.DOTALL)
+        clean_text = clean_text.replace('<br>', '\n').replace('<br/>', '\n')
+        clean_text = re.sub(r'<[^>]+>', '', clean_text)
+    else:
+        clean_text = "Document gol. Reîncercați generarea."
 
-    # --- PAS 2: Formatare Word ---
+    # 2. Formatare Word
     lines = clean_text.split('\n')
-    
     for line in lines:
         stripped_line = line.strip()
         if not stripped_line:
             continue
             
-        # Titluri Markdown (#)
         if stripped_line.startswith('#'):
             clean_content = stripped_line.replace('#', '').strip()
             doc.add_heading(clean_content, level=1)
-        
-        # Liste Markdown (- sau *)
         elif stripped_line.startswith('- ') or stripped_line.startswith('* '):
             clean_content = stripped_line[2:].strip().replace('**', '').replace('__', '')
             doc.add_paragraph(clean_content, style='List Bullet')
-            
-        # Text normal
         else:
             clean_content = stripped_line.replace('**', '').replace('__', '')
             doc.add_paragraph(clean_content)
@@ -174,7 +164,6 @@ if uploaded_files:
                                 mime_type=up_file.type
                             )
                         )
-                        
                         while uploaded_file.state.name == "PROCESSING":
                             time.sleep(1)
                             uploaded_file = client.files.get(name=uploaded_file.name)
@@ -188,7 +177,6 @@ if uploaded_files:
                                 'mime_type': up_file.type
                             })
                             st.sidebar.success(f"✅ {up_file.name} adăugat.")
-                            
                 except Exception as e:
                     st.sidebar.error(f"Eroare upload: {e}")
             progress_bar.progress((idx + 1) / len(uploaded_files))
@@ -203,43 +191,63 @@ else:
 enable_audio = st.sidebar.checkbox("🔊 Audio", value=False)
 
 # ==========================================
-# 6. CONFIGURARE AVOCAT
+# 6. CONFIGURARE AVOCAT (PROMPT FIXAT)
 # ==========================================
 
 PROMPT_AVOCAT = """
 Ești un Avocat Virtual Senior, Expert în ONRC, Drept Comercial și Fiscalitate (România).
 
-OBIECTIV PRINCIPAL:
-Să oferi consultanță juridică preliminară clară și să redactezi acte complete.
+OBIECTIV:
+Să oferi consultanță juridică clară și să redactezi acte la cerere.
 
-REGULI DE AUR (PROCEDURĂ DE LUCRU):
+REGULI DE COMPORTAMENT (DIFERENȚIATE):
 
-1. GROUNDING (Verificare Legislativă):
-   - FOLOSEȘTE ACTIV GOOGLE SEARCH pentru a verifica legile valabile în 2023-2026.
-   - Caută specific în Monitorul Oficial sau pe onrc.ro (ex: Legea 265/2022).
+A. CÂND UTILIZATORUL PUNE ÎNTREBĂRI GENERALE (ex: "Ce știi despre...", "Cum fac...", "Care sunt taxele?"):
+   - Explică pe larg, fă rezumate, oferă pașii de urmat.
+   - Folosește Google Search pentru a găsi legislația 2023-2026.
 
-2. REDACTARE DOCUMENTE (CRITIC):
-   - Când utilizatorul cere "redactează", "scrie" sau "fă-mi un act":
+B. CÂND UTILIZATORUL CERE REDACTARE ACTE (ex: "Redactează actul...", "Scrie decizia..."):
    - NU face rezumate.
-   - Scrie TEXTUL COMPLET al actului, formal, cu articole (Art. 1, Art. 2...).
-   - Folosește titluri Markdown (# TITLU) pentru formatare.
+   - Scrie TEXTUL COMPLET al actului, formal, articol cu articol.
+   - Folosește titluri Markdown (#) pentru structură.
 
-3. ANALIZA DOSARULUI:
-   - Analizează documentele încărcate cu prioritate.
-
-4. DISCLAIMER:
-   - Menționează discret că ești un AI și informațiile sunt orientative.
+C. GENERAL:
+   - Analizează documentele din dosar cu prioritate.
+   - Menționează discret că ești un AI (disclaimer).
 """
 
+# Configurare Tools & Safety
 search_tool = types.Tool(google_search=types.GoogleSearch())
+
+# Dezactivăm filtrele de siguranță pentru a permite discuții legale/financiare
+safety_settings = [
+    types.SafetySetting(
+        category='HARM_CATEGORY_HATE_SPEECH',
+        threshold='BLOCK_NONE'
+    ),
+    types.SafetySetting(
+        category='HARM_CATEGORY_DANGEROUS_CONTENT',
+        threshold='BLOCK_NONE'
+    ),
+    types.SafetySetting(
+        category='HARM_CATEGORY_HARASSMENT',
+        threshold='BLOCK_NONE'
+    ),
+    types.SafetySetting(
+        category='HARM_CATEGORY_SEXUALLY_EXPLICIT',
+        threshold='BLOCK_NONE'
+    ),
+]
+
 generate_config = types.GenerateContentConfig(
     system_instruction=PROMPT_AVOCAT,
     tools=[search_tool],
-    temperature=0.3
+    temperature=0.3,
+    safety_settings=safety_settings # <--- AICI E CHEIA PENTRU DEBLOCARE
 )
 
 # ==========================================
-# 7. INTERFAȚĂ CHAT & LOGICĂ
+# 7. CHAT LOGIC
 # ==========================================
 
 st.title("⚖️ Avocat Consultant ONRC")
@@ -253,47 +261,42 @@ for i, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"], avatar="👤" if msg["role"] == "user" else "⚖️"):
         st.markdown(msg["content"])
         
-        if msg["role"] == "assistant":
-            # Word-ul va fi curat (fără <details> etc)
+        if msg["role"] == "assistant" and msg["content"]: # Buton doar dacă există text
             docx = create_docx(msg["content"])
             st.download_button(
-                label="📄 Descarcă Word (.docx)",
+                label="📄 Descarcă Word",
                 data=docx,
                 file_name=f"Document_Juridic_{i}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 key=f"dl_{i}"
             )
 
-# Input
-if user_input := st.chat_input("Ex: Redactează Decizia Asociatului Unic pentru schimbare sediu..."):
+if user_input := st.chat_input("Ex: Vreau să schimb codurile CAEN. Ce trebuie să fac?"):
     
     st.session_state.messages.append({"role": "user", "content": user_input})
     save_message(st.session_state.session_id, "user", user_input)
     with st.chat_message("user", avatar="👤"):
         st.write(user_input)
 
-    # Context
+    # Payload
     contents_payload = []
     for msg in st.session_state.messages[:-1]:
         role_gemini = "model" if msg["role"] == "assistant" else "user"
-        contents_payload.append(types.Content(
-            role=role_gemini,
-            parts=[types.Part.from_text(text=msg["content"])]
-        ))
+        if msg["content"]: # Ignorăm mesajele goale
+            contents_payload.append(types.Content(
+                role=role_gemini,
+                parts=[types.Part.from_text(text=msg["content"])]
+            ))
     
     current_parts = []
     if st.session_state.uploaded_refs:
         for ref in st.session_state.uploaded_refs:
-            current_parts.append(types.Part.from_uri(
-                file_uri=ref['uri'], 
-                mime_type=ref['mime_type']
-            ))
-        current_parts.append(types.Part.from_text(text="\n\n[SISTEM: Analizează documentele de mai sus]"))
+            current_parts.append(types.Part.from_uri(file_uri=ref['uri'], mime_type=ref['mime_type']))
+        current_parts.append(types.Part.from_text(text="\n\n[SISTEM: Analizează documentele din dosar]"))
     current_parts.append(types.Part.from_text(text=user_input))
     
     contents_payload.append(types.Content(role="user", parts=current_parts))
 
-    # Generare
     with st.chat_message("assistant", avatar="⚖️"):
         placeholder = st.empty()
         full_text = ""
@@ -310,26 +313,29 @@ if user_input := st.chat_input("Ex: Redactează Decizia Asociatului Unic pentru 
                     full_text += chunk.text
                     placeholder.markdown(full_text + "▌")
             
-            placeholder.markdown(full_text)
+            # Finalizare
+            if not full_text:
+                full_text = "Nu am putut găsi informații sau răspunsul a fost blocat. Te rog reformulează."
+                placeholder.error(full_text)
+            else:
+                placeholder.markdown(full_text)
             
             st.session_state.messages.append({"role": "assistant", "content": full_text})
             save_message(st.session_state.session_id, "assistant", full_text)
 
-            # Download imediat
-            docx = create_docx(full_text)
-            st.download_button(
-                label="📄 Descarcă Documentul Word (.docx)",
-                data=docx,
-                file_name="Document_Juridic_AI.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                key="dl_new"
-            )
+            if full_text and "Nu am putut" not in full_text:
+                docx = create_docx(full_text)
+                st.download_button(
+                    label="📄 Descarcă Documentul Word",
+                    data=docx,
+                    file_name="Document_Juridic_AI.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key="dl_new"
+                )
 
-            if enable_audio:
-                # Curățăm audio de simboluri și HTML
+            if enable_audio and full_text:
                 clean_text_audio = re.sub(r'<[^>]+>', '', full_text)
                 clean_text_audio = clean_text_audio.replace("*", "").replace("#", "")[:600]
-                
                 sound = BytesIO()
                 tts = gTTS(text=clean_text_audio, lang='ro')
                 tts.write_to_fp(sound)
