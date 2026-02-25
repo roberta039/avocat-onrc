@@ -7,6 +7,7 @@ from io import BytesIO
 import sqlite3
 import uuid
 import time
+from docx import Document # <--- NOU: Pentru Word
 
 # ==========================================
 # 1. CONFIGURARE PAGINĂ & STIL
@@ -30,7 +31,6 @@ st.markdown("""
 # ==========================================
 
 api_key = None
-# 1. Extragem din secrete
 if "GOOGLE_API_KEY" in st.secrets:
     raw_key = st.secrets["GOOGLE_API_KEY"]
     if isinstance(raw_key, list):
@@ -38,28 +38,25 @@ if "GOOGLE_API_KEY" in st.secrets:
     else:
         api_key = raw_key
 
-# 2. Dacă nu e în secrete, o cerem manual
 if not api_key:
     api_key = st.sidebar.text_input("Introdu Google API Key:", type="password")
 
-# 3. Stop dacă nu avem cheie
 if not api_key:
-    st.warning("⚠️ Te rog introdu cheia API în sidebar.")
+    st.warning("⚠️ Te rog introdu cheia API.")
     st.stop()
 
-# 4. Conectare
 try:
     clean_key = str(api_key).strip()
     client = genai.Client(api_key=clean_key)
 except Exception as e:
-    st.error(f"Eroare la conectarea cu Google AI: {e}")
+    st.error(f"Eroare conectare: {e}")
     st.stop()
 
 # ==========================================
-# 3. MEMORIE SQLITE
+# 3. MEMORIE & FUNCȚII AUXILIARE
 # ==========================================
 def init_db():
-    conn = sqlite3.connect('legal_chat_v5.db')
+    conn = sqlite3.connect('legal_chat_v6.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS history 
                  (session_id TEXT, role TEXT, content TEXT, timestamp REAL)''')
@@ -67,14 +64,14 @@ def init_db():
     conn.close()
 
 def save_message(session_id, role, content):
-    conn = sqlite3.connect('legal_chat_v5.db')
+    conn = sqlite3.connect('legal_chat_v6.db')
     c = conn.cursor()
     c.execute("INSERT INTO history VALUES (?, ?, ?, ?)", (session_id, role, content, time.time()))
     conn.commit()
     conn.close()
 
 def load_history(session_id):
-    conn = sqlite3.connect('legal_chat_v5.db')
+    conn = sqlite3.connect('legal_chat_v6.db')
     c = conn.cursor()
     c.execute("SELECT role, content FROM history WHERE session_id=? ORDER BY timestamp ASC", (session_id,))
     data = c.fetchall()
@@ -82,15 +79,34 @@ def load_history(session_id):
     return [{"role": row[0], "content": row[1]} for row in data]
 
 def clear_history(session_id):
-    conn = sqlite3.connect('legal_chat_v5.db')
+    conn = sqlite3.connect('legal_chat_v6.db')
     c = conn.cursor()
     c.execute("DELETE FROM history WHERE session_id=?", (session_id,))
     conn.commit()
     conn.close()
 
+# --- NOU: FUNCȚIA DE GENERARE WORD ---
+def create_docx(text):
+    doc = Document()
+    doc.add_heading('Document Juridic - Generat AI', 0)
+    
+    # Curățăm puțin markdown-ul pentru a arăta bine în Word
+    # Eliminăm bolding-ul markdown (**text**) ca să nu rămână steluțele
+    clean_text = text.replace("**", "").replace("##", "")
+    
+    # Adăugăm paragrafe
+    for paragraph in clean_text.split('\n'):
+        if paragraph.strip():
+            doc.add_paragraph(paragraph)
+            
+    # Salvăm în memorie (BytesIO)
+    bio = BytesIO()
+    doc.save(bio)
+    bio.seek(0)
+    return bio
+
 init_db()
 
-# ID Sesiune
 if "session_id" not in st.query_params:
     st.session_state.session_id = str(uuid.uuid4())
     st.query_params["session_id"] = st.session_state.session_id
@@ -98,11 +114,10 @@ else:
     st.session_state.session_id = st.query_params["session_id"]
 
 # ==========================================
-# 4. SIDEBAR - UPLOAD (CORECTAT URI)
+# 4. SIDEBAR - UPLOAD
 # ==========================================
 st.sidebar.title("🗂️ Dosar Acte")
 
-# Reset
 if st.sidebar.button("🗑️ Caz Nou (Reset)", type="primary"):
     clear_history(st.session_state.session_id)
     st.session_state.messages = []
@@ -112,9 +127,9 @@ if st.sidebar.button("🗑️ Caz Nou (Reset)", type="primary"):
 st.sidebar.divider()
 
 if "uploaded_refs" not in st.session_state:
-    st.session_state.uploaded_refs = [] # Listă de dict: {'display_name': str, 'uri': str, 'mime_type': str}
+    st.session_state.uploaded_refs = []
 
-uploaded_files = st.sidebar.file_uploader("Adaugă documente (PDF/Foto)", type=["jpg", "png", "pdf"], accept_multiple_files=True)
+uploaded_files = st.sidebar.file_uploader("Adaugă documente", type=["jpg", "png", "pdf"], accept_multiple_files=True)
 
 if uploaded_files:
     if st.sidebar.button("☁️ Încarcă în Cloud"):
@@ -124,8 +139,6 @@ if uploaded_files:
             if not any(f['display_name'] == up_file.name for f in st.session_state.uploaded_refs):
                 try:
                     with st.spinner(f"Se urcă: {up_file.name}..."):
-                        
-                        # Upload
                         file_bytes = up_file.getvalue()
                         uploaded_file = client.files.upload(
                             file=BytesIO(file_bytes),
@@ -134,59 +147,44 @@ if uploaded_files:
                                 mime_type=up_file.type
                             )
                         )
-                        
-                        # Așteptare procesare
                         while uploaded_file.state.name == "PROCESSING":
                             time.sleep(1)
                             uploaded_file = client.files.get(name=uploaded_file.name)
                         
                         if uploaded_file.state.name == "FAILED":
-                            st.sidebar.error(f"Eroare Google: {up_file.name}")
+                            st.sidebar.error(f"Eroare: {up_file.name}")
                         else:
-                            # --- FIX PENTRU EROAREA 400 ---
-                            # Trebuie să folosim .uri (https://...), nu .name (files/...)
-                            final_uri = uploaded_file.uri
-                            
                             st.session_state.uploaded_refs.append({
                                 'display_name': up_file.name,
-                                'uri': final_uri,  # <--- AICI E CHEIA
+                                'uri': uploaded_file.uri, 
                                 'mime_type': up_file.type
                             })
                             st.sidebar.success(f"✅ {up_file.name} indexat.")
-                            
                 except Exception as e:
                     st.sidebar.error(f"Eroare upload: {e}")
-            
             progress_bar.progress((idx + 1) / len(uploaded_files))
-        
         time.sleep(1)
         st.rerun()
 
-# Afișare Dosar
 if st.session_state.uploaded_refs:
     st.sidebar.info(f"Dosar activ: {len(st.session_state.uploaded_refs)} acte")
-    for f in st.session_state.uploaded_refs:
-        st.sidebar.caption(f"📎 {f['display_name']}")
 else:
     st.sidebar.caption("Dosar gol.")
 
 enable_audio = st.sidebar.checkbox("🔊 Audio", value=False)
 
 # ==========================================
-# 5. CHAT LOGIC (CORECTAT URI)
+# 5. CHAT & GENERARE DOCUMENTE
 # ==========================================
 
 PROMPT_AVOCAT = """
-Ești un Avocat Virtual Expert în ONRC și Legislație Comercială (România).
+Ești Avocat Expert ONRC (România). 
 
-OBIECTIV:
-Oferi consultanță juridică preliminară clară.
-
-REGULI CRITICE:
-1. GROUNDING: Folosește Google Search pentru a verifica legile din 2023-2026.
-2. DOSAR: Dacă există documente atașate, analizează-le cu prioritate.
-3. TON: Profesional.
-4. DISCLAIMER: Info orientativă, nu consultanță oficială.
+INSTRUCȚIUNI SPECIALE PENTRU REDACTARE DOCUMENTE:
+1. Dacă utilizatorul cere redactarea unui act (ex: Act Constitutiv, Decizie Asociat, Contract), scrie textul COMPLET și FORMAL.
+2. Folosește structura clară: Articolul 1, Articolul 2 etc.
+3. Nu folosi prescurtări în acte.
+4. Pentru consultanță simplă, fii concis.
 """
 
 search_tool = types.Tool(google_search=types.GoogleSearch())
@@ -197,29 +195,36 @@ generate_config = types.GenerateContentConfig(
 )
 
 st.title("⚖️ Avocat Consultant ONRC")
-st.caption("Verific legislația la zi prin Google Search • Analizez PDF-uri/Imagini")
 
 if "messages" not in st.session_state or not st.session_state.messages:
     st.session_state.messages = load_history(st.session_state.session_id)
 
-# Afișare Chat
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"], avatar="👤" if msg["role"] == "user" else "⚖️"):
         st.markdown(msg["content"])
+        
+        # --- NOU: Buton de download la mesajele vechi ale asistentului ---
+        if msg["role"] == "assistant":
+            # Generăm un nume unic bazat pe lungimea textului (simplificat)
+            doc_name = f"Document_Juridic_{len(msg['content'])}.docx"
+            docx_file = create_docx(msg["content"])
+            st.download_button(
+                label="📄 Descarcă Word",
+                data=docx_file,
+                file_name=doc_name,
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key=f"dl_{msg['timestamp']}" # Cheie unică
+            )
 
-# INPUT
-if user_input := st.chat_input("Întreabă avocatul..."):
+if user_input := st.chat_input("Ex: Redactează o decizie de asociat unic pentru schimbare sediu..."):
     
-    # 1. Salvare Input
     st.session_state.messages.append({"role": "user", "content": user_input})
     save_message(st.session_state.session_id, "user", user_input)
     with st.chat_message("user", avatar="👤"):
         st.write(user_input)
 
-    # 2. Construire Payload
+    # Payload
     contents_payload = []
-    
-    # Istoric (doar text)
     for msg in st.session_state.messages[:-1]:
         role_gemini = "model" if msg["role"] == "assistant" else "user"
         contents_payload.append(types.Content(
@@ -227,26 +232,14 @@ if user_input := st.chat_input("Întreabă avocatul..."):
             parts=[types.Part.from_text(text=msg["content"])]
         ))
     
-    # Mesaj Curent (Fișiere + Întrebare)
     current_parts = []
-    
-    # A. Adăugăm REFERINȚELE (folosind URI-ul complet)
     if st.session_state.uploaded_refs:
         for ref in st.session_state.uploaded_refs:
-            # --- FIX PENTRU EROAREA 400 ---
-            # Folosim ref['uri'] care conține https://...
-            current_parts.append(types.Part.from_uri(
-                file_uri=ref['uri'], 
-                mime_type=ref['mime_type']
-            ))
-        current_parts.append(types.Part.from_text(text="\n\n[SISTEM: Analizează documentele de mai sus din dosarul clientului.]"))
-    
-    # B. Întrebarea
+            current_parts.append(types.Part.from_uri(file_uri=ref['uri'], mime_type=ref['mime_type']))
+        current_parts.append(types.Part.from_text(text="\n\n[Analizează actele atașate]"))
     current_parts.append(types.Part.from_text(text=user_input))
-    
     contents_payload.append(types.Content(role="user", parts=current_parts))
 
-    # 3. Generare
     with st.chat_message("assistant", avatar="⚖️"):
         placeholder = st.empty()
         full_text = ""
@@ -268,12 +261,22 @@ if user_input := st.chat_input("Întreabă avocatul..."):
             st.session_state.messages.append({"role": "assistant", "content": full_text})
             save_message(st.session_state.session_id, "assistant", full_text)
 
+            # --- NOU: Butonul de download apare imediat după generare ---
+            docx_file = create_docx(full_text)
+            st.download_button(
+                label="📄 Descarcă Documentul Word (.docx)",
+                data=docx_file,
+                file_name="Document_Juridic_AI.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key="dl_new"
+            )
+
             if enable_audio:
-                clean_text = full_text.replace("*", "")[:500]
+                clean = full_text.replace("*", "")[:500]
                 sound = BytesIO()
-                tts = gTTS(text=clean_text, lang='ro')
+                tts = gTTS(text=clean, lang='ro')
                 tts.write_to_fp(sound)
                 st.audio(sound, format='audio/mp3')
 
         except Exception as e:
-            st.error(f"Eroare comunicare AI: {e}")
+            st.error(f"Eroare: {e}")
