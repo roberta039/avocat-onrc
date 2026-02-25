@@ -14,7 +14,7 @@ from docx import Document
 # 1. CONFIGURARE PAGINĂ & STIL
 # ==========================================
 st.set_page_config(
-    page_title="Avocat ONRC AI (2025)",
+    page_title="Avocat ONRC AI",
     page_icon="⚖️",
     layout="wide"
 )
