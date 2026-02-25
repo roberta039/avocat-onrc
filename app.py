@@ -7,7 +7,7 @@ from io import BytesIO
 import sqlite3
 import uuid
 import time
-from docx import Document # <--- NOU: Pentru Word
+from docx import Document
 
 # ==========================================
 # 1. CONFIGURARE PAGINĂ & STIL
@@ -56,7 +56,7 @@ except Exception as e:
 # 3. MEMORIE & FUNCȚII AUXILIARE
 # ==========================================
 def init_db():
-    conn = sqlite3.connect('legal_chat_v6.db')
+    conn = sqlite3.connect('legal_chat_v7.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS history 
                  (session_id TEXT, role TEXT, content TEXT, timestamp REAL)''')
@@ -64,42 +64,39 @@ def init_db():
     conn.close()
 
 def save_message(session_id, role, content):
-    conn = sqlite3.connect('legal_chat_v6.db')
+    conn = sqlite3.connect('legal_chat_v7.db')
     c = conn.cursor()
     c.execute("INSERT INTO history VALUES (?, ?, ?, ?)", (session_id, role, content, time.time()))
     conn.commit()
     conn.close()
 
 def load_history(session_id):
-    conn = sqlite3.connect('legal_chat_v6.db')
+    conn = sqlite3.connect('legal_chat_v7.db')
     c = conn.cursor()
+    # Citim doar role și content, nu ne complicăm cu timestamp-ul aici
     c.execute("SELECT role, content FROM history WHERE session_id=? ORDER BY timestamp ASC", (session_id,))
     data = c.fetchall()
     conn.close()
     return [{"role": row[0], "content": row[1]} for row in data]
 
 def clear_history(session_id):
-    conn = sqlite3.connect('legal_chat_v6.db')
+    conn = sqlite3.connect('legal_chat_v7.db')
     c = conn.cursor()
     c.execute("DELETE FROM history WHERE session_id=?", (session_id,))
     conn.commit()
     conn.close()
 
-# --- NOU: FUNCȚIA DE GENERARE WORD ---
+# --- FUNCȚIA DE GENERARE WORD ---
 def create_docx(text):
     doc = Document()
     doc.add_heading('Document Juridic - Generat AI', 0)
     
-    # Curățăm puțin markdown-ul pentru a arăta bine în Word
-    # Eliminăm bolding-ul markdown (**text**) ca să nu rămână steluțele
     clean_text = text.replace("**", "").replace("##", "")
     
-    # Adăugăm paragrafe
     for paragraph in clean_text.split('\n'):
         if paragraph.strip():
             doc.add_paragraph(paragraph)
             
-    # Salvăm în memorie (BytesIO)
     bio = BytesIO()
     doc.save(bio)
     bio.seek(0)
@@ -199,21 +196,24 @@ st.title("⚖️ Avocat Consultant ONRC")
 if "messages" not in st.session_state or not st.session_state.messages:
     st.session_state.messages = load_history(st.session_state.session_id)
 
-for msg in st.session_state.messages:
+# --- REPARAT AICI: Folosim 'enumerate' pentru chei unice ---
+for i, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"], avatar="👤" if msg["role"] == "user" else "⚖️"):
         st.markdown(msg["content"])
         
-        # --- NOU: Buton de download la mesajele vechi ale asistentului ---
+        # Buton download doar la asistent
         if msg["role"] == "assistant":
-            # Generăm un nume unic bazat pe lungimea textului (simplificat)
-            doc_name = f"Document_Juridic_{len(msg['content'])}.docx"
+            doc_name = f"Document_Juridic_{i}.docx"
             docx_file = create_docx(msg["content"])
+            
+            # Folosim indexul 'i' pentru cheia unică (key=f"dl_{i}")
+            # Asta previne eroarea KeyError
             st.download_button(
                 label="📄 Descarcă Word",
                 data=docx_file,
                 file_name=doc_name,
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                key=f"dl_{msg['timestamp']}" # Cheie unică
+                key=f"dl_{i}" 
             )
 
 if user_input := st.chat_input("Ex: Redactează o decizie de asociat unic pentru schimbare sediu..."):
@@ -261,7 +261,7 @@ if user_input := st.chat_input("Ex: Redactează o decizie de asociat unic pentru
             st.session_state.messages.append({"role": "assistant", "content": full_text})
             save_message(st.session_state.session_id, "assistant", full_text)
 
-            # --- NOU: Butonul de download apare imediat după generare ---
+            # Butonul de download imediat (cheia new)
             docx_file = create_docx(full_text)
             st.download_button(
                 label="📄 Descarcă Documentul Word (.docx)",
