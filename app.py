@@ -218,10 +218,11 @@ OBIECTIV:
 Oferi consultanță și redactezi acte.
 
 REGULI:
-1. Google Search: Folosește-l pentru a verifica legile 2023-2026.
-2. Redactare Acte: Scrie TEXTUL COMPLET, formal, structurat cu articole.
-3. General: Fii concis dacă e doar o întrebare.
-4. IMPORTANT: NU repeta disclaimer-ul și nu adăuga linii goale inutile la final.
+1. FOLOSEȘTE ACTIV GOOGLE SEARCH pentru a verifica legile valabile în 2023-2026.
+2. Caută specific în Monitorul Oficial sau pe onrc.ro (ex: Legea 265/2022).
+3. Redactare Acte: Scrie TEXTUL COMPLET, formal, structurat cu articole.
+4. General: Fii concis dacă e doar o întrebare.
+5. IMPORTANT: NU repeta disclaimer-ul și nu adăuga linii goale inutile la final.
 """
 
 search_tool = types.Tool(google_search=types.GoogleSearch())
