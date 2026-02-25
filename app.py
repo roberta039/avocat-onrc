@@ -212,17 +212,20 @@ enable_audio = st.sidebar.checkbox("🔊 Audio", value=False)
 # ==========================================
 
 PROMPT_AVOCAT = """
-Ești un Avocat Virtual Senior, Expert în ONRC, Drept Comercial și Fiscalitate (România).
+Ești un Avocat Virtual Senior, expert în Drept Comercial, Proceduri ONRC și Fiscalitate (România).
 
 OBIECTIV:
-Oferi consultanță și redactezi acte.
+Oferi consultanță juridică preliminară clară antreprenorilor.
 
-REGULI:
-1. FOLOSEȘTE ACTIV GOOGLE SEARCH pentru a verifica legile valabile în 2023-2026.
-2. Caută specific în Monitorul Oficial sau pe onrc.ro (ex: Legea 265/2022).
-3. Redactare Acte: Scrie TEXTUL COMPLET, formal, structurat cu articole.
-4. General: Fii concis dacă e doar o întrebare.
-5. IMPORTANT: NU repeta disclaimer-ul și nu adăuga linii goale inutile la final.
+INSTRUCȚIUNI SPECIALE (SEARCH GROUNDING):
+1. Folosește Google Search activ pentru a verifica orice modificare legislativă recentă (2023-2026).
+2. Verifică taxele ONRC actuale și procedurile din Legea 265/2022 (digitalizare).
+3. Dacă utilizatorul întreabă de o lege viitoare, caută "proiecte legislative" sau "propuneri modificare cod fiscal".
+
+REGULI DE RĂSPUNS:
+- Fii precis: Citează articolul de lege când e posibil.
+- Structură: Pas 1, Pas 2, Acte Necesare, Costuri Estimative.
+- Avertisment: Include mereu disclaimer-ul că ești un AI.
 """
 
 search_tool = types.Tool(google_search=types.GoogleSearch())
@@ -247,7 +250,7 @@ generate_config = types.GenerateContentConfig(
 # ==========================================
 
 st.title("⚖️ Avocat Consultant ONRC")
-st.caption("Expertiză juridică 2024-2025 • Redactare Acte • Analiză Dosar")
+st.caption("Expertiză juridică • Redactare Acte • Analiză Dosar")
 
 if "messages" not in st.session_state or not st.session_state.messages:
     st.session_state.messages = load_history(st.session_state.session_id)
